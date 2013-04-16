@@ -31,6 +31,7 @@
 #include <sys/uio.h>
 #endif
 #ifdef WIN32
+#include <winsock2.h>
 #include <mswsock.h>
 #endif
 #include <errno.h>
@@ -109,7 +110,9 @@ enum {
 
 #ifdef WIN32
 static LPFN_WSARECVMSG pfWSARecvMsg;
+#if defined(WSAID_WSASENDMSG)
 static LPFN_WSASENDMSG pfWSASendMsg;
+#endif
 #endif
 
 int
@@ -159,7 +162,15 @@ netsnmp_udpbase_recvfrom(int s, void *buf, int len, struct sockaddr *from,
             bytes_received : -1;
         *fromlen = msg.namelen;
     } else {
+#ifndef MSG_DONTWAIT
+        u_long iMode=1;
+        ioctlsocket(s, FIONBIO, &iMode);
+        r = recvfrom(s, buf, len, 0, from, fromlen);
+        iMode=0;
+        ioctlsocket(s, FIONBIO, &iMode);
+#else
         r = recvfrom(s, buf, len, MSG_DONTWAIT, from, fromlen);
+#endif
     }
 #endif /* !defined(WIN32) */
 
@@ -316,6 +327,7 @@ int netsnmp_udpbase_sendto(int fd, struct in_addr *srcip, int if_index,
     m.lpBuffers     = &wsabuf;
     m.dwBufferCount = 1;
 
+#if defined(WSAID_WSASENDMSG)
     if (pfWSASendMsg && srcip && srcip->s_addr != INADDR_ANY) {
         WSACMSGHDR *cm;
 
@@ -345,6 +357,7 @@ int netsnmp_udpbase_sendto(int fd, struct in_addr *srcip, int if_index,
         DEBUGMSGTL(("udpbase:sendto", "sending from [%d] %s failed: %d\n",
                     if_index, inet_ntoa(*srcip), WSAGetLastError()));
     }
+#endif
     rc = sendto(fd, data, len, 0, remote, sizeof(struct sockaddr));
     return rc;
 #endif /* !defined(WIN32) */
@@ -463,7 +476,6 @@ netsnmp_udp_base_ctor(void)
 #if defined(WIN32) && defined(HAVE_IP_PKTINFO)
     SOCKET s = socket(AF_INET, SOCK_DGRAM, 0);
     GUID WSARecvMsgGuid = WSAID_WSARECVMSG;
-    GUID WSASendMsgGuid = WSAID_WSASENDMSG;
     DWORD nbytes;
     int result;
 
@@ -476,6 +488,8 @@ netsnmp_udp_base_ctor(void)
         DEBUGMSGTL(("netsnmp_udp", "WSARecvMsg() not found (errno %ld)\n",
                     WSAGetLastError()));
 
+#if defined(WSAID_WSASENDMSG)
+    GUID WSASendMsgGuid = WSAID_WSASENDMSG;
     /* WSASendMsg(): Windows Vista / Windows Server 2008 and later */
     result = WSAIoctl(s, SIO_GET_EXTENSION_FUNCTION_POINTER,
                       &WSASendMsgGuid, sizeof(WSASendMsgGuid),
@@ -483,6 +497,7 @@ netsnmp_udp_base_ctor(void)
     if (result == SOCKET_ERROR)
         DEBUGMSGTL(("netsnmp_udp", "WSASendMsg() not found (errno %ld)\n",
                     WSAGetLastError()));
+#endif
 
     closesocket(s);
 #endif
